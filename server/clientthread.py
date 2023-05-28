@@ -1,6 +1,7 @@
 import threading
 import socket
-from dirsync import sync_dir
+from dirsync import sync_dir, read_until_newline, process_line
+import os
 
 class ClientThread(threading.Thread):
     """ Handles client threads """
@@ -13,7 +14,7 @@ class ClientThread(threading.Thread):
         self.api_key = api_key
         print("New connection added: ", client_address)
 
-    def run(self):
+    def run_inital_download(self):
         print("Connection from : ", self.client_addr)
 
         for action, type, name, size in sync_dir("../monitor"):
@@ -34,3 +35,17 @@ class ClientThread(threading.Thread):
                         response = self.csocket.recv(1024).decode()
                         if response == "OK":
                             continue
+    
+        self.csocket.sendall(bytes("DONE\n","utf-8"))
+
+
+    def listen_to_updates(self):
+        print("Listning at : ", self.client_addr)
+
+        while True:
+            update_action_line = read_until_newline(self.csocket)
+
+            process_line(self.csocket, update_action_line)
+            
+
+

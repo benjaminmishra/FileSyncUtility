@@ -5,6 +5,7 @@ import (
 	"client/jwt"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -22,7 +23,7 @@ type FileState struct {
 const address = "localhost:6060"
 const secretKey = "mu9vTDxsLDZMfqP9NP+l81WjG6t4yYe8H8gLKH2X9wE="
 
-var filesState = make(map[string]FileState)
+//var filesState = make(map[string]FileState)
 
 func main() {
 
@@ -49,8 +50,6 @@ func main() {
 
 	conn.Write([]byte("OK"))
 
-	initialFileSync(conn)
-
 	w, err := jwt.NewWatcher()
 	if err != nil {
 		fmt.Println(err)
@@ -58,62 +57,94 @@ func main() {
 	}
 	defer w.Close()
 
-	err = w.WatchDirectories("../go-client-monitor")
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	initialFileSync(&conn, w)
 
-	go watchFiles(w)
+	watchFiles(w, &conn)
 
 	select {} // run forever
 }
 
-func watchFiles(w *jwt.Watcher) {
+func watchFiles(w *jwt.Watcher, conn *net.Conn) {
 	for {
+		println("Starting file watch")
 		action, type_, name, size, err := w.Next()
-
 		if err != nil {
 			fmt.Println(err)
 			break
 		}
-
-		path := filepath.Join(dir, name)
-
-		fileState, ok := filesState[path]
-		if !ok || action == "UPDATE" {
-			// If the file is not in our map, or if it was modified,
-			// update our map and send the file.
-			fileState = FileState{
-				LastModified: time.Now(), // we could also use file.ModTime() here
-				FileName:     name,
-			}
-			filesState[path] = fileState
-			go sendUpdate(path, fileState)
-		}
+		time.Sleep(time.Second)
+		println("Sending updated file")
+		go sendFile(conn, action, type_, name, size)
 	}
 }
 
-func sendUpdate(path string, fileState FileState) {
-	conn, err := net.Dial("tcp", address)
+func sendFile(conn *net.Conn, action, type_, name, size string) {
+	actionStr := fmt.Sprintf("ACTION : %s, TYPE : %s , NAME : %s , SIZE : %s\n", action, type_, name, size)
+
+	_, err := (*conn).Write([]byte(actionStr))
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Error sending action string:", err)
 		return
 	}
-	defer conn.Close()
 
-	// listen for reply
-	message, _ := bufio.NewReader(conn).ReadString('\n')
-	fmt.Print("Message from server: " + message)
+	response, err := bufio.NewReader(*conn).ReadString('\n')
+	if err != nil {
+		fmt.Println("Error receiving response:", err)
+		return
+	}
+	response = strings.TrimSpace(response)
+
+	switch type_ {
+	case "DIR":
+		if response == "OK" {
+			return
+		}
+	case "FILE":
+		if response == "READY" {
+			fileContent, err := ioutil.ReadFile(name)
+			if err != nil {
+				fmt.Println("Error reading file:", err)
+				return
+			}
+
+			_, err = (*conn).Write(fileContent)
+			if err != nil {
+				fmt.Println("Error sending file:", err)
+				return
+			}
+
+			response, err = bufio.NewReader(*conn).ReadString('\n')
+			if err != nil {
+				fmt.Println("Error receiving response:", err)
+				return
+			}
+
+			response = strings.TrimSpace(response)
+			if response == "OK" {
+				return
+			}
+		}
+	default:
+		fmt.Printf("No action taken for type %s\n", type_)
+	}
 }
 
-func initialFileSync(conn net.Conn) {
-	reader := bufio.NewReader(conn)
+func initialFileSync(conn *net.Conn, watcher *jwt.Watcher) {
+	connection := *conn
+	reader := bufio.NewReader(connection)
+
 	for {
+
 		line, err := reader.ReadString('\n') // use '\n' as delimiter
+
 		if err != nil {
 			fmt.Println("Error reading:", err)
 			return // consider if you want to return or take some other action here
+		}
+
+		// if we encounter done that means streaming is done
+		if strings.TrimRight(line, "\n") == "DONE" {
+			break
 		}
 
 		action, type_, name, size, err := parseActionString(line)
@@ -124,7 +155,9 @@ func initialFileSync(conn net.Conn) {
 		fmt.Printf("Action: %s, Type: %s, Name: %s, Size %s\n", action, type_, name, size)
 
 		if action == "CREATE" {
-			new_name := strings.Replace(name, "../", "../go-client-monitor/", 1)
+			new_name := filepath.Base(name)
+			os.Chdir("../monitor")
+
 			switch strings.Trim(type_, " ") {
 			case "FILE":
 				// derive total number of bytes we need to read
@@ -140,10 +173,10 @@ func initialFileSync(conn net.Conn) {
 				}
 				defer file.Close()
 
-				conn.Write([]byte("READY")) // send readiness confirmation after processing the line
+				connection.Write([]byte("READY")) // send readiness confirmation after processing the line
 
 				// Stream data from the connection to the file
-				_, err = io.CopyN(file, conn, bytesToRead)
+				_, err = io.CopyN(file, connection, bytesToRead)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -155,15 +188,18 @@ func initialFileSync(conn net.Conn) {
 				if err != nil {
 					fmt.Println(err)
 				}
-				fmt.Printf("Dir Created %s\n", name)
 
+				err = (*watcher).WatchDirectories(new_name)
+				if err != nil {
+					fmt.Println(err)
+				}
+				fmt.Printf("Dir Created %s\n", name)
 			default:
 				fmt.Printf("No action taken for type %s\n", type_)
 			}
 
-			conn.Write([]byte("OK")) // send done confirmation after processing the line
+			connection.Write([]byte("OK")) // send done confirmation after processing the line
 		}
-
 	}
 }
 

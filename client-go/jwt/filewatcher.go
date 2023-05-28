@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -63,11 +64,18 @@ func (w *Watcher) Next() (string, string, string, string, error) {
 	}
 
 	raw := (*unix.InotifyEvent)(unsafe.Pointer(&buf[0]))
-	nameLen := uint(raw.Len)
 	nameBuf := buf[unix.SizeofInotifyEvent:]
-	name := string(nameBuf[:nameLen-1])
+
+	// Truncate at the first null byte
+	nullPos := bytes.IndexByte(nameBuf, 0)
+	if nullPos != -1 {
+		nameBuf = nameBuf[:nullPos]
+	}
+	name := string(nameBuf)
 
 	dir := w.events[int(raw.Wd)]
+
+	print("file change event")
 
 	var action string
 	var type_ string
@@ -94,7 +102,7 @@ func (w *Watcher) Next() (string, string, string, string, error) {
 		}
 	}
 
-	return action, type_, name, strconv.FormatInt(size, 10), nil
+	return action, type_, filepath.Join(dir, name), strconv.FormatInt(size, 10), nil
 }
 
 func isDir(name string) bool {

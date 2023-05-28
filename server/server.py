@@ -50,7 +50,8 @@ if __name__ == "__main__":
             client_threads[new_api_key] = new_thread
 
             if(response.decode()=="OK"):
-                new_thread.run()
+                new_thread.run_inital_download()
+                new_thread.listen_to_updates()
 
             client_sock.shutdown(1)
             client_sock.close()
