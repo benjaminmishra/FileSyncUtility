@@ -1,7 +1,8 @@
-package jwt
+package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -48,6 +49,7 @@ func (w *Watcher) AddDirectory(path string) error {
 }
 
 func (w *Watcher) WatchDirectories(path string) error {
+	fmt.Printf("Watching Directory %s", path)
 	return filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return w.AddDirectory(path)
@@ -73,9 +75,12 @@ func (w *Watcher) Next() (string, string, string, string, error) {
 	}
 	name := string(nameBuf)
 
-	dir := w.events[int(raw.Wd)]
+	// Skip hidden files or directories
+	if len(name) > 0 && name[0] == '.' {
+		return "", "", "", "", nil
+	}
 
-	print("file change event")
+	dir := w.events[int(raw.Wd)]
 
 	var action string
 	var type_ string

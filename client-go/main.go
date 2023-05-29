@@ -2,14 +2,10 @@ package main
 
 import (
 	"bufio"
-	"client/jwt"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"log"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,11 +17,11 @@ type FileState struct {
 }
 
 const address = "localhost:6060"
-const secretKey = "mu9vTDxsLDZMfqP9NP+l81WjG6t4yYe8H8gLKH2X9wE="
-
-//var filesState = make(map[string]FileState)
 
 func main() {
+
+	apiKey := os.Args[1]           // Read API key from command line arguments
+	directoryToWatch := os.Args[2] //
 
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
@@ -34,47 +30,70 @@ func main() {
 	}
 	defer conn.Close()
 
-	conn.Write([]byte("NewConn"))
+	// Send the API key to server with delimiter
+	conn.Write([]byte(fmt.Sprintf("%s\n", apiKey)))
 
 	message, _ := bufio.NewReader(conn).ReadString('\n')
 	fmt.Print("Message from server: " + message)
 
-	jwtToken := strings.Trim(message, "\n")
-
-	payload, err := jwt.DecodeAndVerifyPayload(jwtToken, secretKey)
-	if err != nil {
-		fmt.Println("Invalid JWT")
-	}
-
-	fmt.Printf("Payload: %+v\n", payload)
-
-	conn.Write([]byte("OK"))
-
-	w, err := jwt.NewWatcher()
-	if err != nil {
-		fmt.Println(err)
+	if message == "Failed to Authenticate\n" {
+		fmt.Println("Failed to authenticate")
 		return
 	}
-	defer w.Close()
 
-	initialFileSync(&conn, w)
+	conn.Write([]byte("OK\n"))
 
-	watchFiles(w, &conn)
+	fileSystemEventsChannel := make(chan string, 100)
+
+	// receive the inital set of updates before cofiguring watch
+	go receiveFileSyncUpdates(&conn, directoryToWatch, fileSystemEventsChannel)
+
+	go watchFileSysUpdates(&conn, directoryToWatch, fileSystemEventsChannel)
 
 	select {} // run forever
 }
 
-func watchFiles(w *jwt.Watcher, conn *net.Conn) {
+func watchFileSysUpdates(conn *net.Conn, directoryToWatch string, eventsChannel chan string) {
+	watcher, err := NewWatcher()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	err = watcher.WatchDirectories(directoryToWatch)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer watcher.Close()
+
 	for {
-		println("Starting file watch")
-		action, type_, name, size, err := w.Next()
+		action, type_, name, size, err := watcher.Next()
 		if err != nil {
 			fmt.Println(err)
 			break
 		}
-		time.Sleep(time.Second)
-		println("Sending updated file")
-		go sendFile(conn, action, type_, name, size)
+
+		// if name is empty then skip sending update
+		if name == "" {
+			continue
+		}
+		name = strings.TrimPrefix(name, directoryToWatch)
+		//actionStr := fmt.Sprintf("ACTION : %s, TYPE : %s , NAME : %s , SIZE : %s", action, type_, name, size)
+
+		// select {
+		// case update := <-eventsChannel:
+		// 	fmt.Println("Update " + update)
+		// 	if update == actionStr {
+		// 		fmt.Printf("[Ignore] - Same as incoming event %s", update)
+		// 		continue
+		// 	}
+		// default:
+		// 	fmt.Println("Sleep")
+		// 	time.Sleep(2 * time.Second)
+		// }
+		sendFile(conn, action, type_, name, size)
 	}
 }
 
@@ -101,13 +120,14 @@ func sendFile(conn *net.Conn, action, type_, name, size string) {
 		}
 	case "FILE":
 		if response == "READY" {
-			fileContent, err := ioutil.ReadFile(name)
+			// Open the file
+			file, err := os.Open(name)
 			if err != nil {
 				fmt.Println("Error reading file:", err)
 				return
 			}
 
-			_, err = (*conn).Write(fileContent)
+			_, err = io.Copy((*conn), file)
 			if err != nil {
 				fmt.Println("Error sending file:", err)
 				return
@@ -127,108 +147,140 @@ func sendFile(conn *net.Conn, action, type_, name, size string) {
 	default:
 		fmt.Printf("No action taken for type %s\n", type_)
 	}
+
+	_, err = (*conn).Write([]byte("DONE\n"))
+	if err != nil {
+		fmt.Println("Error sending DONE:", err)
+		return
+	}
 }
 
-func initialFileSync(conn *net.Conn, watcher *jwt.Watcher) {
+func receiveFileSyncUpdates(conn *net.Conn, directoryToWatch string, eventsChannel chan string) {
 	connection := *conn
 	reader := bufio.NewReader(connection)
+	fmt.Println("Syncing with server")
 
 	for {
-
-		line, err := reader.ReadString('\n') // use '\n' as delimiter
-
+		line, err := reader.ReadString(byte('\n')) // use '\n' as delimiter
+		fmt.Println("[Received] - " + line)
 		if err != nil {
 			fmt.Println("Error reading:", err)
-			return // consider if you want to return or take some other action here
+			return // consider if we want to return or take some other action here
 		}
 
 		// if we encounter done that means streaming is done
-		if strings.TrimRight(line, "\n") == "DONE" {
-			break
+		if strings.Trim(line, "\n") == "DONE" {
+			continue
 		}
+		// fmt.Println("Sending line")
+		// // send message into events channel as well
+
+		// select {
+		// case eventsChannel <- line:
+		// 	fmt.Println("message sent")
+
+		// default:
+		// 	fmt.Println("message not sent")
+		// }
 
 		action, type_, name, size, err := parseActionString(line)
 		if err != nil {
 			fmt.Println(err)
 		}
 
-		fmt.Printf("Action: %s, Type: %s, Name: %s, Size %s\n", action, type_, name, size)
+		_, err = os.Stat(directoryToWatch)
+		if os.IsNotExist(err) {
+			os.MkdirAll(directoryToWatch, 0777)
+		}
+		os.Chdir(directoryToWatch)
+		os.Chmod(directoryToWatch, 0777)
 
-		if action == "CREATE" {
-			new_name := filepath.Base(name)
-			os.Chdir("../monitor")
-
-			switch strings.Trim(type_, " ") {
-			case "FILE":
-				// derive total number of bytes we need to read
-				bytesToRead, err := strconv.ParseInt(strings.Trim(size, "\n"), 10, 64)
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				// Open a file for writing
-				file, err := os.Create(new_name)
-				if err != nil {
-					log.Fatal(err)
-				}
-				defer file.Close()
-
-				connection.Write([]byte("READY")) // send readiness confirmation after processing the line
-
-				// Stream data from the connection to the file
-				_, err = io.CopyN(file, connection, bytesToRead)
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				fmt.Printf("File Created %s\n", name)
-			case "DIR":
-				// Create a directory
-				err := os.Mkdir(new_name, os.ModePerm)
-				if err != nil {
-					fmt.Println(err)
-				}
-
-				err = (*watcher).WatchDirectories(new_name)
-				if err != nil {
-					fmt.Println(err)
-				}
-				fmt.Printf("Dir Created %s\n", name)
-			default:
-				fmt.Printf("No action taken for type %s\n", type_)
-			}
-
-			connection.Write([]byte("OK")) // send done confirmation after processing the line
+		err = processActionString(action, type_, name, size, conn)
+		if err != nil {
+			fmt.Println("Error processing action string : " + err.Error())
 		}
 	}
 }
 
 func parseActionString(actionStr string) (string, string, string, string, error) {
-	parts := strings.Split(actionStr, ", ")
+	parts := strings.Split(actionStr, ",")
 
 	if len(parts) != 4 {
 		return "", "", "", "", fmt.Errorf("invalid action string")
 	}
 
-	actionPart := strings.Split(parts[0], " : ")
+	actionPart := strings.Split(strings.TrimSpace(parts[0]), " : ")
 	if len(actionPart) != 2 {
 		return "", "", "", "", fmt.Errorf("invalid action string")
 	}
 
-	typePart := strings.Split(parts[1], " : ")
+	typePart := strings.Split(strings.TrimSpace(parts[1]), " : ")
 	if len(typePart) != 2 {
 		return "", "", "", "", fmt.Errorf("invalid type string")
 	}
 
-	namePart := strings.Split(parts[2], " : ")
+	namePart := strings.Split(strings.TrimSpace(parts[2]), " : ")
 	if len(namePart) != 2 {
 		return "", "", "", "", fmt.Errorf("invalid name string")
 	}
 
-	sizePart := strings.Split(parts[3], " : ")
+	sizePart := strings.Split(strings.TrimSpace(parts[3]), " : ")
 	if len(sizePart) != 2 {
 		return "", "", "", "", fmt.Errorf("invalid size string")
 	}
 
-	return actionPart[1], typePart[1], namePart[1], sizePart[1], nil
+	return strings.TrimSpace(actionPart[1]), strings.TrimSpace(typePart[1]), strings.TrimSpace(namePart[1]), strings.TrimSpace(sizePart[1]), nil
+}
+
+func processActionString(action string, objectType string, objectName string, objectSize string, tcpConn *net.Conn) error {
+	connection := *tcpConn
+
+	if action == "CREATE" {
+
+		switch strings.Trim(objectType, " ") {
+		case "FILE":
+			// derive total number of bytes we need to read
+			bytesToRead, err := strconv.ParseInt(strings.Trim(objectSize, "\n"), 10, 64)
+			if err != nil {
+				return err
+			}
+
+			// Open a file for writing
+			file, err := os.Create(objectName)
+			if err != nil {
+				return err
+			}
+
+			err = os.Chmod(objectName, 0777)
+			if err != nil {
+				return err
+			}
+
+			defer file.Close()
+
+			connection.Write([]byte("READY\n")) // send readiness confirmation after processing the line
+
+			// Stream data from the connection to the file
+			_, err = io.CopyN(file, connection, bytesToRead)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("File Created %s\n", objectName)
+		case "DIR":
+			// Create a directory
+			err := os.MkdirAll(objectName, os.ModePerm)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Dir Created %s\n", objectName)
+		default:
+			fmt.Printf("No action taken for type %s\n", objectType)
+		}
+
+		connection.Write([]byte("OK\n")) // send done confirmation after processing the line
+	}
+
+	return nil
 }
