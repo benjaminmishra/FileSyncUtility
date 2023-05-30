@@ -5,7 +5,7 @@ from constants import ROOT_DIR
 import os
 import db_helper
 
-class ClientHandler(threading.Thread):
+class ClientHandler():
     """ Handles clients """
 
     def __init__(self, client_address:str, client_socket:socket.socket):
@@ -64,7 +64,6 @@ class ClientHandler(threading.Thread):
             
             process_line(self.csocket, update_action_line)
 
-
     def __shutdown(self):
         self.csocket.close()
         print("Client disconnected, shtting down thread")
@@ -77,3 +76,8 @@ class ClientHandler(threading.Thread):
             return True
         except socket.error:
             return False
+        
+        
+    def __brodcast(self):
+        
+        

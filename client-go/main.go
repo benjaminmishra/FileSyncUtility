@@ -65,7 +65,7 @@ func watchFileSysUpdates(conn *net.Conn, directoryToWatch string, eventsChannel 
 		fmt.Println(err)
 		return
 	}
-
+	
 	defer watcher.Close()
 
 	for {
@@ -80,19 +80,19 @@ func watchFileSysUpdates(conn *net.Conn, directoryToWatch string, eventsChannel 
 			continue
 		}
 		name = strings.TrimPrefix(name, directoryToWatch)
-		//actionStr := fmt.Sprintf("ACTION : %s, TYPE : %s , NAME : %s , SIZE : %s", action, type_, name, size)
+		actionStr := fmt.Sprintf("ACTION : %s, TYPE : %s , NAME : %s , SIZE : %s", action, type_, name, size)
 
-		// select {
-		// case update := <-eventsChannel:
-		// 	fmt.Println("Update " + update)
-		// 	if update == actionStr {
-		// 		fmt.Printf("[Ignore] - Same as incoming event %s", update)
-		// 		continue
-		// 	}
-		// default:
-		// 	fmt.Println("Sleep")
-		// 	time.Sleep(2 * time.Second)
-		// }
+		 select {
+		 case update := <-eventsChannel:
+		 	fmt.Println("Update " + update)
+		 	if update == actionStr {
+		 		fmt.Printf("[Ignore] - Same as incoming event %s", update)
+		 		continue
+		 	}
+		 default:
+		 	fmt.Println("Sleep")
+		 	time.Sleep(2 * time.Second)
+		 }
 		sendFile(conn, action, type_, name, size)
 	}
 }
@@ -127,7 +127,7 @@ func sendFile(conn *net.Conn, action, type_, name, size string) {
 				return
 			}
 
-			_, err = io.Copy((*conn), file)
+			_, err = io.Copy(*conn, file)
 			if err != nil {
 				fmt.Println("Error sending file:", err)
 				return
@@ -172,16 +172,17 @@ func receiveFileSyncUpdates(conn *net.Conn, directoryToWatch string, eventsChann
 		if strings.Trim(line, "\n") == "DONE" {
 			continue
 		}
-		// fmt.Println("Sending line")
-		// // send message into events channel as well
+		
+		// send message into events channel as well
+		// this notifies the file system watcher go routine
 
-		// select {
-		// case eventsChannel <- line:
-		// 	fmt.Println("message sent")
+		 select {
+		 case eventsChannel <- line:
+		 	fmt.Println("message sent")
 
-		// default:
-		// 	fmt.Println("message not sent")
-		// }
+		 default:
+		 	fmt.Println("message not sent")
+		 }
 
 		action, type_, name, size, err := parseActionString(line)
 		if err != nil {

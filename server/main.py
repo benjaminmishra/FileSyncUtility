@@ -1,27 +1,32 @@
-"""server.py"""
+"""Main entry point of the application"""
 
 from concurrent.futures import ThreadPoolExecutor
 import socket
-from clientthread import ClientHandler
+from clienthandler import ClientHandler
 from constants import LOCALHOST, PORT, SECRET_KEY
 import db_helper
-from typing import List, Tuple
+from typing import Dict, Tuple
 from dirsync import read_until_newline
 
-def autheticate_client(api_key)->Tuple[str,bool]:
-    client_id = ""
-    success = False
+# dict to keep track of clients
+connected_clients: Dict[str, ClientHandler] = dict()
+
+
+def autheticate_client(api_key:str) -> Tuple[str, bool]:
+    client_guid = ""
+    is_success = False
     if db_helper.is_valid_key(db_conn, api_key):
-        client_id = db_helper.select_client_by_api_key(db_conn, api_key)
+        client_guid = db_helper.select_client_by_api_key(db_conn, api_key)
         # new client 
-        if client_id is None:
-            client_id = db_helper.generate_client_id()
-            db_helper.assign_api_key_to_client(db_conn, client_id, api_key)
-            print(f"Assigned API Key {api_key} to Client {client_id}!")
+        if client_guid is None:
+            client_guid = db_helper.generate_client_id()
+            db_helper.assign_api_key_to_client(db_conn, client_guid, api_key)
+            print(f"Assigned API Key {api_key} to Client {client_guid}!")
 
-        success = True
+        is_success = True
 
-    return client_id, success  
+    return client_guid, is_success  
+
 
 if __name__ == "__main__":
     db_conn = db_helper.create_connection()
@@ -55,6 +60,7 @@ if __name__ == "__main__":
             client_sock.sendall(bytes(authecation_message,"utf-8"))
 
             client_handler = ClientHandler(client_addr, client_sock)
+            connected_clients[client_id] = client_handler
             executor.submit(client_handler.handle)
 
 

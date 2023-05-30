@@ -70,7 +70,6 @@ def select_client_by_api_key(conn, api_key):
     result = cursor.fetchone()
     return None if result is None else result[0]
 
-
 def insert_api_keys(conn):
     cursor = conn.cursor()
     for key in api_keys:
