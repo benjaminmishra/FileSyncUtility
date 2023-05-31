@@ -3,16 +3,14 @@
 from concurrent.futures import ThreadPoolExecutor
 import socket
 from clienthandler import ClientHandler
-from constants import LOCALHOST, PORT, SECRET_KEY
+from constants import LOCALHOST, PORT
 import db_helper
-from typing import Dict, Tuple
+from typing import Tuple
 from dirsync import read_until_newline
-
-# dict to keep track of clients
-connected_clients: Dict[str, ClientHandler] = dict()
+import broadcaster as b
 
 
-def autheticate_client(api_key:str) -> Tuple[str, bool]:
+def authenticate_client(api_key: str) -> Tuple[str, bool]:
     client_guid = ""
     is_success = False
     if db_helper.is_valid_key(db_conn, api_key):
@@ -25,7 +23,7 @@ def autheticate_client(api_key:str) -> Tuple[str, bool]:
 
         is_success = True
 
-    return client_guid, is_success  
+    return client_guid, is_success
 
 
 if __name__ == "__main__":
@@ -33,14 +31,16 @@ if __name__ == "__main__":
     db_helper.create_valid_api_keys_table(db_conn)
     db_helper.create_clients_table(db_conn)
     db_helper.insert_api_keys(db_conn)
-    
+
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
     server.bind((LOCALHOST, PORT))
-    
+
+    broadcaster = b.Broadcaster()
+
     print("Server started")
-    
+
     server.listen(32)
 
     with ThreadPoolExecutor(max_workers=32) as executor:
@@ -49,19 +49,20 @@ if __name__ == "__main__":
             client_sock, client_addr = server.accept()
             api_key = read_until_newline(client_sock)
 
-            client_id,success = autheticate_client(api_key)
+            if api_key is None:
+                print("Failed to verify API Key")
+                break
+            
+            client_id, success = authenticate_client(api_key)
 
-            authecation_message = "SUCCESS\n"
+            authentication_message = "SUCCESS\n"
 
             if not success:
                 print(f"API Key {api_key} is not valid!")
-                authecation_message = "FAILURE\n"
+                authentication_message = "FAILURE\n"
 
-            client_sock.sendall(bytes(authecation_message,"utf-8"))
+            client_sock.sendall(bytes(authentication_message, "utf-8"))
 
-            client_handler = ClientHandler(client_addr, client_sock)
-            connected_clients[client_id] = client_handler
+            client_handler = ClientHandler(client_addr, client_sock, client_id, broadcaster)
+            
             executor.submit(client_handler.handle)
-
-
-        

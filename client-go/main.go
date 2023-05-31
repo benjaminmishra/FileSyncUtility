@@ -4,17 +4,12 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
-
-type FileState struct {
-	LastModified time.Time
-	FileName     string
-}
 
 const address = "localhost:6060"
 
@@ -31,7 +26,10 @@ func main() {
 	defer conn.Close()
 
 	// Send the API key to server with delimiter
-	conn.Write([]byte(fmt.Sprintf("%s\n", apiKey)))
+	_, err = conn.Write([]byte(fmt.Sprintf("%s\n", apiKey)))
+	if err != nil {
+		log.Fatal("Failed to send confirmation back")
+	}
 
 	message, _ := bufio.NewReader(conn).ReadString('\n')
 	fmt.Print("Message from server: " + message)
@@ -41,11 +39,13 @@ func main() {
 		return
 	}
 
-	conn.Write([]byte("OK\n"))
+	_, err = conn.Write([]byte("OK\n"))
+	if err != nil {
+		log.Fatal("Failed to send confirmation back")
+	}
 
 	fileSystemEventsChannel := make(chan string, 100)
 
-	// receive the inital set of updates before cofiguring watch
 	go receiveFileSyncUpdates(&conn, directoryToWatch, fileSystemEventsChannel)
 
 	go watchFileSysUpdates(&conn, directoryToWatch, fileSystemEventsChannel)
@@ -65,13 +65,13 @@ func watchFileSysUpdates(conn *net.Conn, directoryToWatch string, eventsChannel 
 		fmt.Println(err)
 		return
 	}
-	
+
 	defer watcher.Close()
 
 	for {
 		action, type_, name, size, err := watcher.Next()
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println(err.Error())
 			break
 		}
 
@@ -80,25 +80,25 @@ func watchFileSysUpdates(conn *net.Conn, directoryToWatch string, eventsChannel 
 			continue
 		}
 		name = strings.TrimPrefix(name, directoryToWatch)
-		actionStr := fmt.Sprintf("ACTION : %s, TYPE : %s , NAME : %s , SIZE : %s", action, type_, name, size)
+		actionStr := fmt.Sprintf("ACTION : MODIFIED, TYPE : %s , NAME : %s , SIZE : %s", type_, name, size)
+		fmt.Println("ActionStr " + actionStr)
+		select {
+		case update := <-eventsChannel:
+			fmt.Println("Update " + update)
 
-		 select {
-		 case update := <-eventsChannel:
-		 	fmt.Println("Update " + update)
-		 	if update == actionStr {
-		 		fmt.Printf("[Ignore] - Same as incoming event %s", update)
-		 		continue
-		 	}
-		 default:
-		 	fmt.Println("Sleep")
-		 	time.Sleep(2 * time.Second)
-		 }
-		sendFile(conn, action, type_, name, size)
+			if update == actionStr {
+				fmt.Printf("[Ignore] - Same as incoming event %s", update)
+				continue
+			}
+		default:
+			sendUpdateToServer(conn, action, type_, name, size)
+		}
 	}
 }
 
-func sendFile(conn *net.Conn, action, type_, name, size string) {
+func sendUpdateToServer(conn *net.Conn, action, type_, name, size string) {
 	actionStr := fmt.Sprintf("ACTION : %s, TYPE : %s , NAME : %s , SIZE : %s\n", action, type_, name, size)
+	fmt.Println("[Sending] - " + actionStr)
 
 	_, err := (*conn).Write([]byte(actionStr))
 	if err != nil {
@@ -172,17 +172,10 @@ func receiveFileSyncUpdates(conn *net.Conn, directoryToWatch string, eventsChann
 		if strings.Trim(line, "\n") == "DONE" {
 			continue
 		}
-		
+
 		// send message into events channel as well
 		// this notifies the file system watcher go routine
-
-		 select {
-		 case eventsChannel <- line:
-		 	fmt.Println("message sent")
-
-		 default:
-		 	fmt.Println("message not sent")
-		 }
+		eventsChannel <- line
 
 		action, type_, name, size, err := parseActionString(line)
 		if err != nil {

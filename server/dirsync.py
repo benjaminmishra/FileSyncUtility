@@ -1,6 +1,6 @@
 import os
 from socket import socket
-from typing import Tuple
+from typing import Tuple, Union
 from constants import ROOT_DIR
 
 def sync_dir(root_dir):
@@ -10,8 +10,8 @@ def sync_dir(root_dir):
         dirnames[:] = [d for d in dirnames if not d[0] == '.']
 
         if dirpath != root_dir:
-            dir = dirpath.replace(root_dir,"",1)
-            yield "CREATE", "DIR" , dir , 0
+            dir:str = dirpath.replace(root_dir,"",1)
+            yield "CREATE", "DIR" , dir.removeprefix("/") , 0
 
         # Filter out hidden files
         filenames = [f for f in filenames if not f[0] == '.']
@@ -19,9 +19,9 @@ def sync_dir(root_dir):
         for file_name in filenames:
             full_file_name = os.path.join(dirpath, file_name)
             size = os.path.getsize(full_file_name)
-            file_from_root = full_file_name.replace(root_dir,"",1)
+            file_from_root:str = full_file_name.replace(root_dir,"",1)
 
-            yield "CREATE", "FILE", file_from_root, size
+            yield "CREATE", "FILE", file_from_root.removeprefix("/"), size
 
 def read_until_newline(conn: socket):
     message = ''
@@ -65,7 +65,7 @@ def parse_action_string(action_str)->Tuple[str,str,str,str]:
 
     return action_part[1].strip(), type_part[1].strip(), name_part[1].strip(), size_part[1].strip()
 
-def process_line(sock, line):
+def process_line(sock, line) -> Union[Tuple[str,str,str,int],None] :
     action, type_, name, size = parse_action_string(line)
 
     print(f"[Received] - Action: {action}, Type: {type_}, Name: {name}, Size {size}")
@@ -91,8 +91,9 @@ def process_line(sock, line):
                 print(f"Dir Created {name}")
             except OSError as err:
                 print(err)
-
+                return None
         else:
             print(f"No action taken for type {type_}")
 
         sock.sendall(b"OK")  # send done confirmation after processing the line
+        return action,type_,name,size

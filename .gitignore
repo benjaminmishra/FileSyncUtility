@@ -7,3 +7,4 @@ monitor
 go-client-monitor
 __pycache__
 *.db
+.fleet/

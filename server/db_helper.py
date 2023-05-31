@@ -17,11 +17,14 @@ api_keys: List[str] = [
     "9c1bd7d9a5d849c5b0adfdaf6c71d9a5"
 ]
 
+
 def create_connection(): 
     return sqlite3.connect(DATABASE)
 
+
 def close_connection(conn):
     conn.close()
+
 
 def create_clients_table(conn):
     try:
@@ -35,6 +38,7 @@ def create_clients_table(conn):
     except Exception as e:
         print(e)
 
+
 def create_valid_api_keys_table(conn):
     try:
         sql_create_api_keys_table = """
@@ -46,29 +50,35 @@ def create_valid_api_keys_table(conn):
     except Exception as e:
         print(f"An error occurred: {e}")
 
+
 def is_valid_key(conn: sqlite3.Connection, api_key: str):
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM valid_api_keys WHERE key=?", (api_key,))
     return cursor.fetchone() is not None
+
 
 def is_key_assigned(conn, api_key):
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM clients WHERE api_key=?", (api_key,))
     return cursor.fetchone() is not None
 
+
 def assign_api_key_to_client(conn: sqlite3.Connection, client_id: str, api_key: str):
     cursor = conn.cursor()
     cursor.execute("INSERT INTO clients(id, api_key) VALUES (?, ?)", (client_id, api_key))
     conn.commit()
 
+
 def generate_client_id():
     return str(uuid.uuid4())
+
 
 def select_client_by_api_key(conn, api_key):
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM clients WHERE api_key=?", (api_key,))
     result = cursor.fetchone()
     return None if result is None else result[0]
+
 
 def insert_api_keys(conn):
     cursor = conn.cursor()
